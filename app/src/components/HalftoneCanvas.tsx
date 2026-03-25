@@ -225,7 +225,9 @@ export function HalftoneCanvas({
         ctx.fillRect(0, 0, w, h);
       }
     } else {
-      const scaledSettings = { ...settings, gridSize: Math.round(settings.gridSize * dpr) };
+      const isMobile = dimensions.width < 1024;
+      const mobileScale = isMobile ? 0.7 : 1;
+      const scaledSettings = { ...settings, gridSize: Math.round(settings.gridSize * dpr * mobileScale) };
       renderHalftone(ctx, imageData, w, h, shapes, scaledSettings, animRef.current, mouseRef.current, overlay ?? undefined, bgMedia);
     }
 
