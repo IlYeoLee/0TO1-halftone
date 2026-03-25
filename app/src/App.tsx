@@ -24,10 +24,13 @@ export default function App() {
   const [mobileControlsOpen, setMobileControlsOpen] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showOriginal, setShowOriginal] = useState(false);
+  const [showCursor, setShowCursor] = useState(true);
   const [textLayers, setTextLayers] = useState<TextLayer[]>([]);
   const [selectedTextId, setSelectedTextId] = useState<string | null>(null);
+  const [bgMedia, setBgMedia] = useState<HTMLImageElement | HTMLVideoElement | null>(null);
   const appRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const bgVideoRef = useRef<HTMLVideoElement | null>(null);
 
   useEffect(() => {
     const onFsChange = () => setIsFullscreen(!!document.fullscreenElement);
@@ -55,6 +58,9 @@ export default function App() {
       if (e.key === '1') {
         setShowOriginal(prev => !prev);
       }
+      if (e.key === '2') {
+        setShowCursor(prev => !prev);
+      }
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
@@ -81,6 +87,22 @@ export default function App() {
     }).catch(() => setHasCamera(false));
   }, []);
 
+  // Load default video on startup
+  useEffect(() => {
+    const video = document.createElement('video');
+    video.src = '/default.mp4';
+    video.loop = true;
+    video.muted = true;
+    video.playsInline = true;
+    video.crossOrigin = 'anonymous';
+    video.addEventListener('loadeddata', () => {
+      videoRef.current = video;
+      setSourceMedia(video);
+      video.play();
+    });
+    video.load();
+  }, []);
+
   const handleSettingsChange = useCallback((updates: Partial<HalftoneSettings>) => {
     setSettings(prev => {
       setSettingsHistory(h => [...h.slice(-49), prev]);
@@ -105,6 +127,50 @@ export default function App() {
       videoRef.current = null;
     }
   }, []);
+
+  const cleanupBgVideo = useCallback(() => {
+    if (bgVideoRef.current) {
+      bgVideoRef.current.pause();
+      bgVideoRef.current.src = '';
+      bgVideoRef.current.load();
+      bgVideoRef.current = null;
+    }
+  }, []);
+
+  const handleBgFileSelect = useCallback((file: File) => {
+    if (file.type.startsWith('video/')) {
+      cleanupBgVideo();
+      const url = URL.createObjectURL(file);
+      const video = document.createElement('video');
+      video.src = url;
+      video.loop = true;
+      video.muted = true;
+      video.playsInline = true;
+      video.crossOrigin = 'anonymous';
+      video.addEventListener('loadeddata', () => {
+        bgVideoRef.current = video;
+        setBgMedia(video);
+        video.play();
+      });
+      video.addEventListener('error', () => { URL.revokeObjectURL(url); });
+      video.load();
+      return;
+    }
+
+    cleanupBgVideo();
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      setBgMedia(img);
+      URL.revokeObjectURL(url);
+    };
+    img.src = url;
+  }, [cleanupBgVideo]);
+
+  const clearBgMedia = useCallback(() => {
+    cleanupBgVideo();
+    setBgMedia(null);
+  }, [cleanupBgVideo]);
 
   const handleFileSelect = useCallback((file: File) => {
     if (file.type.startsWith('video/')) {
@@ -134,20 +200,50 @@ export default function App() {
       const reader = new FileReader();
       reader.onload = () => {
         const svgText = reader.result as string;
-        const blob = new Blob([svgText], { type: 'image/svg+xml;charset=utf-8' });
+
+        // Parse viewBox to get intrinsic dimensions
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(svgText, 'image/svg+xml');
+        const svgEl = doc.querySelector('svg');
+        let svgW = parseFloat(svgEl?.getAttribute('width') || '0');
+        let svgH = parseFloat(svgEl?.getAttribute('height') || '0');
+        if ((!svgW || !svgH) && svgEl) {
+          const vb = svgEl.getAttribute('viewBox');
+          if (vb) {
+            const parts = vb.split(/[\s,]+/).map(Number);
+            if (parts.length === 4) {
+              svgW = parts[2];
+              svgH = parts[3];
+            }
+          }
+        }
+        // Fallback
+        if (!svgW || !svgH) { svgW = 800; svgH = 800; }
+
+        // Force explicit width/height on the SVG element so the browser renders at correct size
+        if (svgEl) {
+          svgEl.setAttribute('width', String(svgW));
+          svgEl.setAttribute('height', String(svgH));
+        }
+        const fixedSvgText = new XMLSerializer().serializeToString(doc);
+
+        const blob = new Blob([fixedSvgText], { type: 'image/svg+xml;charset=utf-8' });
         const url = URL.createObjectURL(blob);
         const img = new Image();
         img.onload = () => {
+          // Use SVG's intrinsic dimensions, scale up to at least 800px on longest side
+          const maxSide = Math.max(svgW, svgH);
+          const upscale = maxSide < 800 ? 800 / maxSide : 1;
+          const canvasW = Math.round(svgW * upscale);
+          const canvasH = Math.round(svgH * upscale);
+
           const canvas = document.createElement('canvas');
-          canvas.width = Math.max(img.width, 800);
-          canvas.height = Math.max(img.height, 800);
+          canvas.width = canvasW;
+          canvas.height = canvasH;
           const ctx = canvas.getContext('2d')!;
           ctx.fillStyle = '#ffffff';
-          ctx.fillRect(0, 0, canvas.width, canvas.height);
-          const scale = Math.min(canvas.width / img.width, canvas.height / img.height);
-          const x = (canvas.width - img.width * scale) / 2;
-          const y = (canvas.height - img.height * scale) / 2;
-          ctx.drawImage(img, x, y, img.width * scale, img.height * scale);
+          ctx.fillRect(0, 0, canvasW, canvasH);
+          ctx.drawImage(img, 0, 0, canvasW, canvasH);
 
           const finalImg = new Image();
           finalImg.onload = () => {
@@ -249,6 +345,8 @@ export default function App() {
           isFullscreen={isFullscreen}
           onToggleFullscreen={toggleFullscreen}
           showOriginal={showOriginal}
+          showCursor={showCursor}
+          bgMedia={bgMedia}
           textLayers={textLayers}
           selectedTextId={selectedTextId}
           onSelectText={setSelectedTextId}
@@ -281,6 +379,9 @@ export default function App() {
             onAddText={addTextLayer}
             onUpdateText={updateTextLayer}
             onDeleteText={deleteTextLayer}
+            onBgFileSelect={handleBgFileSelect}
+            onClearBg={clearBgMedia}
+            hasBgMedia={!!bgMedia}
           />
         </div>
       )}
@@ -305,6 +406,9 @@ export default function App() {
             onAddText={addTextLayer}
             onUpdateText={updateTextLayer}
             onDeleteText={deleteTextLayer}
+            onBgFileSelect={handleBgFileSelect}
+            onClearBg={clearBgMedia}
+            hasBgMedia={!!bgMedia}
           />
         </div>
       )}

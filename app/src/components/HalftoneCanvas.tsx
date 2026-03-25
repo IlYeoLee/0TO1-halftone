@@ -17,6 +17,8 @@ interface HalftoneCanvasProps {
   isFullscreen: boolean;
   onToggleFullscreen: () => void;
   showOriginal: boolean;
+  showCursor: boolean;
+  bgMedia: HTMLImageElement | HTMLVideoElement | null;
   textLayers: TextLayer[];
   selectedTextId: string | null;
   onSelectText: (id: string | null) => void;
@@ -26,7 +28,7 @@ interface HalftoneCanvasProps {
 
 export function HalftoneCanvas({
   sourceImage, settings, isFullscreen, onToggleFullscreen,
-  showOriginal, textLayers, selectedTextId, onSelectText, onUpdateTextLayer,
+  showOriginal, showCursor, bgMedia, textLayers, selectedTextId, onSelectText, onUpdateTextLayer,
   className,
 }: HalftoneCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -38,7 +40,7 @@ export function HalftoneCanvas({
   const mouseRef = useRef<MouseState>({ x: 0, y: 0, active: false });
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
   const [showFsToast, setShowFsToast] = useState(false);
-  const fsToastTimeout = useRef<ReturnType<typeof setTimeout>>();
+  const fsToastTimeout = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   // Text overlay ImageData (rendered text at canvas resolution for halftone blending)
   const textOverlayRef = useRef<ImageData | null>(null);
@@ -179,16 +181,31 @@ export function HalftoneCanvas({
         ctx.restore();
       }
     } else if (!imageData && !overlay) {
-      ctx.fillStyle = settings.bgColor;
-      ctx.fillRect(0, 0, w, h);
+      // No halftone source — just draw background
+      if (bgMedia) {
+        const bw = bgMedia instanceof HTMLVideoElement ? bgMedia.videoWidth : bgMedia.naturalWidth;
+        const bh = bgMedia instanceof HTMLVideoElement ? bgMedia.videoHeight : bgMedia.naturalHeight;
+        if (bw > 0 && bh > 0) {
+          const scale = Math.max(w / bw, h / bh);
+          const dw = bw * scale;
+          const dh = bh * scale;
+          ctx.drawImage(bgMedia, (w - dw) / 2, (h - dh) / 2, dw, dh);
+        } else {
+          ctx.fillStyle = settings.bgColor;
+          ctx.fillRect(0, 0, w, h);
+        }
+      } else {
+        ctx.fillStyle = settings.bgColor;
+        ctx.fillRect(0, 0, w, h);
+      }
     } else {
       const scaledSettings = { ...settings, gridSize: Math.round(settings.gridSize * dpr) };
-      renderHalftone(ctx, imageData, w, h, shapes, scaledSettings, animRef.current, mouseRef.current, overlay);
+      renderHalftone(ctx, imageData, w, h, shapes, scaledSettings, animRef.current, mouseRef.current, overlay ?? undefined, bgMedia);
     }
 
     animRef.current.time += 0.016;
     rafRef.current = requestAnimationFrame(render);
-  }, [sourceImage, settings, dimensions, dpr, showOriginal, textLayers]);
+  }, [sourceImage, settings, dimensions, dpr, showOriginal, bgMedia, textLayers]);
 
   useEffect(() => {
     rafRef.current = requestAnimationFrame(render);
@@ -260,7 +277,7 @@ export function HalftoneCanvas({
       const highResImgData = sourceImage
         ? imageToImageData(sourceImage, Math.max(exportW, exportH))
         : imgData;
-      renderHalftone(ctx, highResImgData, exportW, exportH, shapes, exportSettings, createAnimationState(), undefined, exportTextOverlay);
+      renderHalftone(ctx, highResImgData, exportW, exportH, shapes, exportSettings, createAnimationState(), undefined, exportTextOverlay, bgMedia);
     }
 
     offscreen.toBlob((blob) => {
@@ -272,7 +289,7 @@ export function HalftoneCanvas({
       link.click();
       URL.revokeObjectURL(url);
     }, 'image/png');
-  }, [settings, dimensions, sourceImage, showOriginal, textLayers]);
+  }, [settings, dimensions, sourceImage, showOriginal, bgMedia, textLayers]);
 
   // Text drag handlers
   const handleTextMouseDown = useCallback((e: React.MouseEvent, id: string, layer: TextLayer) => {
@@ -332,7 +349,7 @@ export function HalftoneCanvas({
     <div ref={containerRef} className={`relative w-full h-full ${className || ''}`}>
       <canvas
         ref={canvasRef}
-        style={{ display: 'block', width: dimensions.width, height: dimensions.height, cursor: 'none' }}
+        style={{ display: 'block', width: dimensions.width, height: dimensions.height, cursor: showCursor ? 'default' : 'none' }}
         onMouseMove={handleMouseMove}
         onMouseLeave={handleMouseLeave}
         onClick={handleCanvasClick}

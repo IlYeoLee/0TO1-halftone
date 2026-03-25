@@ -21,21 +21,21 @@ export interface HalftoneSettings {
 }
 
 export const DEFAULT_SETTINGS: HalftoneSettings = {
-  gridSize: 24,
-  contrast: 1.4,
-  brightness: 0.05,
-  threshold: 0.05,
-  animSpeed: 1.0,
-  bgColor: '#f5f5f0',
-  dotColor: '#0a0a0a',
-  dotColorV1: '#0a0a0a',
-  dotColorV2: '#0a0a0a',
-  dotColorV3: '#0a0a0a',
-  dotColorV4: '#0a0a0a',
+  gridSize: 12,
+  contrast: 0.65,
+  brightness: 0.02,
+  threshold: 0.31,
+  animSpeed: 1.2,
+  bgColor: '#000000',
+  dotColor: '#0A0A0A',
+  dotColorV1: '#FF32C6',
+  dotColorV2: '#F25A06',
+  dotColorV3: '#0AC32A',
+  dotColorV4: '#039BEA',
   showGrid: false,
-  imageScale: 1.0,
-  imageOffsetX: 0,
-  imageOffsetY: 0,
+  imageScale: 0.85,
+  imageOffsetX: 0.04,
+  imageOffsetY: 0.24,
   fillEmpty: false,
 };
 
@@ -126,7 +126,7 @@ function renderLogoToCanvas(
   cellHeight: number,
   color: string
 ): HTMLCanvasElement {
-  const superScale = Math.max(2, Math.ceil(128 / Math.max(cellWidth, cellHeight)));
+  const superScale = Math.max(8, Math.ceil(512 / Math.max(cellWidth, cellHeight)));
   const rw = cellWidth * superScale;
   const rh = cellHeight * superScale;
 
@@ -263,12 +263,30 @@ export function renderHalftone(
   settings: HalftoneSettings,
   animState: AnimationState,
   mouse?: MouseState,
-  textOverlay?: ImageData
+  textOverlay?: ImageData,
+  bgSource?: HTMLImageElement | HTMLVideoElement | null
 ) {
   const { gridSize, threshold, bgColor, dotColorV1, dotColorV2, dotColorV3, dotColorV4, imageScale, imageOffsetX, imageOffsetY, fillEmpty } = settings;
 
-  ctx.fillStyle = bgColor;
-  ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+  // Draw background: image/video (full quality, cover mode) or solid color
+  if (bgSource) {
+    const bw = bgSource instanceof HTMLVideoElement ? bgSource.videoWidth : bgSource.naturalWidth;
+    const bh = bgSource instanceof HTMLVideoElement ? bgSource.videoHeight : bgSource.naturalHeight;
+    if (bw > 0 && bh > 0) {
+      const scale = Math.max(canvasWidth / bw, canvasHeight / bh);
+      const dw = bw * scale;
+      const dh = bh * scale;
+      const dx = (canvasWidth - dw) / 2;
+      const dy = (canvasHeight - dh) / 2;
+      ctx.drawImage(bgSource, dx, dy, dw, dh);
+    } else {
+      ctx.fillStyle = bgColor;
+      ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+    }
+  } else {
+    ctx.fillStyle = bgColor;
+    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+  }
 
   // If no source and no text overlay, just show background
   if (!imageData && !textOverlay) return;
@@ -287,8 +305,10 @@ export function renderHalftone(
   }
 
   // Image transform (only relevant when imageData exists)
-  const baseScaleX = imageData ? imageData.width / canvasWidth : 1;
-  const baseScaleY = imageData ? imageData.height / canvasHeight : 1;
+  // Use uniform scale to preserve aspect ratio (cover mode: fill canvas, crop excess)
+  const baseScale = imageData ? Math.min(imageData.width / canvasWidth, imageData.height / canvasHeight) : 1;
+  const imgPadX = imageData ? (imageData.width - canvasWidth * baseScale) / 2 : 0;
+  const imgPadY = imageData ? (imageData.height - canvasHeight * baseScale) / 2 : 0;
   const invScale = 1 / imageScale;
   const offsetPxX = imageOffsetX * canvasWidth * 0.5;
   const offsetPxY = imageOffsetY * canvasHeight * 0.5;
@@ -320,10 +340,10 @@ export function renderHalftone(
       if (imageData) {
         const centeredX = (cellX - canvasWidth / 2 + offsetPxX) * invScale + canvasWidth / 2;
         const centeredY = (cellY - canvasHeight / 2 + offsetPxY) * invScale + canvasHeight / 2;
-        const srcX = centeredX * baseScaleX;
-        const srcY = centeredY * baseScaleY;
-        const srcCellW = cellW * baseScaleX * invScale;
-        const srcCellH = cellH * baseScaleY * invScale;
+        const srcX = centeredX * baseScale + imgPadX;
+        const srcY = centeredY * baseScale + imgPadY;
+        const srcCellW = cellW * baseScale * invScale;
+        const srcCellH = cellH * baseScale * invScale;
         brightness = getRegionBrightness(imageData, srcX, srcY, Math.max(srcCellW, srcCellH), settings);
       } else {
         brightness = bgBright;

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Camera, Upload, Grid3x3, Sun, Contrast, Zap, ZoomIn, Move, RotateCcw, Undo2, Plus, Trash2, Type } from 'lucide-react';
 import type { HalftoneSettings } from '../utils/halftone';
 import type { TextLayer } from '../App';
@@ -18,6 +18,9 @@ interface ControlPanelProps {
   onAddText: () => void;
   onUpdateText: (id: string, updates: Partial<TextLayer>) => void;
   onDeleteText: (id: string) => void;
+  onBgFileSelect: (file: File) => void;
+  onClearBg: () => void;
+  hasBgMedia: boolean;
 }
 
 function Slider({
@@ -62,6 +65,65 @@ function Slider({
   );
 }
 
+function ColorInput({
+  value,
+  onChange,
+  className = 'h-8',
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  className?: string;
+}) {
+  const [hex, setHex] = useState(value);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (document.activeElement !== inputRef.current) {
+      setHex(value);
+    }
+  }, [value]);
+
+  const handleHexChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    let v = e.target.value;
+    if (!v.startsWith('#')) v = '#' + v;
+    setHex(v);
+    if (/^#[0-9a-fA-F]{6}$/.test(v)) {
+      onChange(v);
+    }
+  };
+
+  const handleBlur = () => {
+    if (/^#[0-9a-fA-F]{6}$/.test(hex)) {
+      onChange(hex);
+    } else {
+      setHex(value);
+    }
+  };
+
+  return (
+    <div className="flex gap-1.5 items-center">
+      <input
+        type="color"
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        className={`w-10 shrink-0 ${className} border border-neutral-200 cursor-pointer appearance-none bg-transparent
+                  [&::-webkit-color-swatch-wrapper]:p-0.5 [&::-webkit-color-swatch]:border-0`}
+      />
+      <input
+        ref={inputRef}
+        type="text"
+        value={hex}
+        onChange={handleHexChange}
+        onBlur={handleBlur}
+        maxLength={7}
+        className={`flex-1 min-w-0 px-1.5 ${className} text-[10px] font-mono border border-neutral-200 bg-white
+                  focus:border-black focus:outline-none transition-colors uppercase`}
+        placeholder="#000000"
+      />
+    </div>
+  );
+}
+
 export function ControlPanel({
   settings,
   onSettingsChange,
@@ -77,6 +139,9 @@ export function ControlPanel({
   onAddText,
   onUpdateText,
   onDeleteText,
+  onBgFileSelect,
+  onClearBg,
+  hasBgMedia,
 }: ControlPanelProps) {
   const [fontList, setFontList] = useState<string[]>([]);
   const [fontSearch, setFontSearch] = useState('');
@@ -337,32 +402,46 @@ export function ControlPanel({
         {/* Colors */}
         <div className="space-y-3">
           <h3 className="text-[10px] uppercase tracking-[0.15em] text-neutral-500">Colors</h3>
-          <div className="flex gap-3">
-            <div className="flex-1 space-y-1.5">
+          <div className="space-y-2">
+            <div className="space-y-1.5">
               <label className="text-[10px] uppercase tracking-[0.15em] text-neutral-400">Background</label>
-              <input
-                type="color"
+              <ColorInput
                 value={settings.bgColor}
-                onChange={e => onSettingsChange({ bgColor: e.target.value })}
-                className="w-full h-8 border border-neutral-200 cursor-pointer appearance-none bg-transparent
-                          [&::-webkit-color-swatch-wrapper]:p-0.5 [&::-webkit-color-swatch]:border-0"
+                onChange={c => onSettingsChange({ bgColor: c })}
               />
+              <div className="flex gap-1.5">
+                <label className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 border border-neutral-200
+                                hover:border-black hover:bg-neutral-50 transition-all cursor-pointer text-[9px]
+                                uppercase tracking-[0.1em]">
+                  <Upload size={10} />
+                  {hasBgMedia ? 'Change BG' : 'BG Image/Video'}
+                  <input
+                    type="file"
+                    accept="image/*,video/*"
+                    onChange={e => { const f = e.target.files?.[0]; if (f) onBgFileSelect(f); e.target.value = ''; }}
+                    className="hidden"
+                  />
+                </label>
+                {hasBgMedia && (
+                  <button
+                    onClick={onClearBg}
+                    className="px-2 py-1.5 border border-red-200 hover:border-red-400 hover:bg-red-50
+                              transition-all cursor-pointer text-[9px] uppercase tracking-[0.1em] text-red-600"
+                  >
+                    <Trash2 size={10} />
+                  </button>
+                )}
+              </div>
             </div>
-            <div className="flex-1 space-y-1.5">
+            <div className="space-y-1.5">
               <label className="text-[10px] uppercase tracking-[0.15em] text-neutral-400">All Dots</label>
-              <input
-                type="color"
+              <ColorInput
                 value={settings.dotColor}
-                onChange={e => {
-                  const c = e.target.value;
-                  onSettingsChange({ dotColor: c, dotColorV1: c, dotColorV2: c, dotColorV3: c, dotColorV4: c });
-                }}
-                className="w-full h-8 border border-neutral-200 cursor-pointer appearance-none bg-transparent
-                          [&::-webkit-color-swatch-wrapper]:p-0.5 [&::-webkit-color-swatch]:border-0"
+                onChange={c => onSettingsChange({ dotColor: c, dotColorV1: c, dotColorV2: c, dotColorV3: c, dotColorV4: c })}
               />
             </div>
           </div>
-          <div className="grid grid-cols-4 gap-2">
+          <div className="grid grid-cols-2 gap-2">
             {([
               { key: 'dotColorV1' as const, label: 'V1', src: '/logo-1.svg' },
               { key: 'dotColorV2' as const, label: 'V2', src: '/logo-2.svg' },
@@ -374,12 +453,10 @@ export function ControlPanel({
                   <img src={v.src} className="w-3 h-3" alt="" />
                   {v.label}
                 </label>
-                <input
-                  type="color"
+                <ColorInput
                   value={settings[v.key]}
-                  onChange={e => onSettingsChange({ [v.key]: e.target.value })}
-                  className="w-full h-6 border border-neutral-200 cursor-pointer appearance-none bg-transparent
-                            [&::-webkit-color-swatch-wrapper]:p-0.5 [&::-webkit-color-swatch]:border-0"
+                  onChange={c => onSettingsChange({ [v.key]: c })}
+                  className="h-6"
                 />
               </div>
             ))}
@@ -579,12 +656,10 @@ export function ControlPanel({
               {/* Color */}
               <div className="space-y-1.5">
                 <label className="text-[10px] uppercase tracking-[0.15em] text-neutral-400">Text Color</label>
-                <input
-                  type="color"
+                <ColorInput
                   value={selectedLayer.color}
-                  onChange={e => onUpdateText(selectedLayer.id, { color: e.target.value })}
-                  className="w-full h-6 border border-neutral-200 cursor-pointer appearance-none bg-transparent
-                            [&::-webkit-color-swatch-wrapper]:p-0.5 [&::-webkit-color-swatch]:border-0"
+                  onChange={c => onUpdateText(selectedLayer.id, { color: c })}
+                  className="h-6"
                 />
               </div>
 
@@ -606,6 +681,7 @@ export function ControlPanel({
           <h3 className="text-[10px] uppercase tracking-[0.15em] text-neutral-500">Shortcuts</h3>
           <div className="text-[10px] text-neutral-400 space-y-0.5">
             <div><kbd className="px-1 py-0.5 bg-neutral-100 border border-neutral-200 text-[9px]">1</kbd> Toggle original / halftone</div>
+            <div><kbd className="px-1 py-0.5 bg-neutral-100 border border-neutral-200 text-[9px]">2</kbd> Toggle mouse cursor</div>
           </div>
         </div>
 
