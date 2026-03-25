@@ -69,7 +69,16 @@ export function HalftoneCanvas({
     const updateSize = () => {
       if (!containerRef.current) return;
       const rect = containerRef.current.getBoundingClientRect();
-      setDimensions({ width: Math.floor(rect.width), height: Math.floor(rect.height) });
+      const w = Math.floor(rect.width);
+      const h = Math.floor(rect.height);
+      // On mobile (portrait), keep width full and use 16:9 aspect ratio
+      const isMobilePortrait = w < 1024 && h > w;
+      if (isMobilePortrait) {
+        const canvasH = Math.floor(w * 9 / 16);
+        setDimensions({ width: w, height: canvasH });
+      } else {
+        setDimensions({ width: w, height: h });
+      }
     };
     updateSize();
     const observer = new ResizeObserver(updateSize);
@@ -133,6 +142,23 @@ export function HalftoneCanvas({
   }, [dpr]);
 
   const handleMouseLeave = useCallback(() => {
+    mouseRef.current = { ...mouseRef.current, active: false };
+  }, []);
+
+  const handleTouchMove = useCallback((e: React.TouchEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const touch = e.touches[0];
+    if (!touch) return;
+    const rect = canvas.getBoundingClientRect();
+    mouseRef.current = {
+      x: (touch.clientX - rect.left) * dpr,
+      y: (touch.clientY - rect.top) * dpr,
+      active: true,
+    };
+  }, [dpr]);
+
+  const handleTouchEnd = useCallback(() => {
     mouseRef.current = { ...mouseRef.current, active: false };
   }, []);
 
@@ -346,12 +372,16 @@ export function HalftoneCanvas({
   }, [editingTextId, onSelectText]);
 
   return (
-    <div ref={containerRef} className={`relative w-full h-full ${className || ''}`}>
+    <div ref={containerRef} className={`relative w-full h-full flex items-center justify-center ${className || ''}`}
+      style={{ backgroundColor: settings.bgColor }}>
       <canvas
         ref={canvasRef}
         style={{ display: 'block', width: dimensions.width, height: dimensions.height, cursor: showCursor ? 'default' : 'none' }}
         onMouseMove={handleMouseMove}
         onMouseLeave={handleMouseLeave}
+        onTouchStart={handleTouchMove}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
         onClick={handleCanvasClick}
       />
 
