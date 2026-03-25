@@ -21,11 +21,11 @@ export interface HalftoneSettings {
 }
 
 export const DEFAULT_SETTINGS: HalftoneSettings = {
-  gridSize: 12,
-  contrast: 0.65,
+  gridSize: 20,
+  contrast: 0.70,
   brightness: 0.02,
   threshold: 0.31,
-  animSpeed: 1.2,
+  animSpeed: 0.3,
   bgColor: '#000000',
   dotColor: '#0A0A0A',
   dotColorV1: '#FF32C6',
@@ -33,9 +33,9 @@ export const DEFAULT_SETTINGS: HalftoneSettings = {
   dotColorV3: '#0AC32A',
   dotColorV4: '#039BEA',
   showGrid: false,
-  imageScale: 0.85,
-  imageOffsetX: 0.04,
-  imageOffsetY: 0.24,
+  imageScale: 0.90,
+  imageOffsetX: 0.0,
+  imageOffsetY: 0.0,
   fillEmpty: false,
 };
 
