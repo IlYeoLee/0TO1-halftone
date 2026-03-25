@@ -226,7 +226,7 @@ export function HalftoneCanvas({
       }
     } else {
       const isMobile = dimensions.width < 1024;
-      const mobileScale = isMobile ? 0.7 : 1;
+      const mobileScale = isMobile ? 0.5 : 1;
       const scaledSettings = { ...settings, gridSize: Math.round(settings.gridSize * dpr * mobileScale) };
       renderHalftone(ctx, imageData, w, h, shapes, scaledSettings, animRef.current, mouseRef.current, overlay ?? undefined, bgMedia);
     }
