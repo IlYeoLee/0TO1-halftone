@@ -264,12 +264,15 @@ export function renderHalftone(
   animState: AnimationState,
   mouse?: MouseState,
   textOverlay?: ImageData,
-  bgSource?: HTMLImageElement | HTMLVideoElement | null
+  bgSource?: HTMLImageElement | HTMLVideoElement | null,
+  skipBackground?: boolean
 ) {
   const { gridSize, threshold, bgColor, dotColorV1, dotColorV2, dotColorV3, dotColorV4, imageScale, imageOffsetX, imageOffsetY, fillEmpty } = settings;
 
   // Draw background: image/video (full quality, cover mode) or solid color
-  if (bgSource) {
+  if (skipBackground) {
+    ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+  } else if (bgSource) {
     const bw = bgSource instanceof HTMLVideoElement ? bgSource.videoWidth : bgSource.naturalWidth;
     const bh = bgSource instanceof HTMLVideoElement ? bgSource.videoHeight : bgSource.naturalHeight;
     if (bw > 0 && bh > 0) {

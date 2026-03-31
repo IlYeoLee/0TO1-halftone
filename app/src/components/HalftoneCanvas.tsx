@@ -33,6 +33,7 @@ export function HalftoneCanvas({
 }: HalftoneCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animRef = useRef<AnimationState>(createAnimationState());
+  const recAnimRef = useRef<AnimationState>(createAnimationState());
   const rafRef = useRef<number>(0);
   const shapesRef = useRef<Awaited<ReturnType<typeof loadLogoShapes>> | null>(null);
   const imageDataRef = useRef<ImageData | null>(null);
@@ -41,6 +42,21 @@ export function HalftoneCanvas({
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
   const [showFsToast, setShowFsToast] = useState(false);
   const fsToastTimeout = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recSeconds, setRecSeconds] = useState(0);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordedChunksRef = useRef<Blob[]>([]);
+  const recTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const isRecordingRef = useRef(false);
+  const recCanvasRef = useRef<HTMLCanvasElement>(document.createElement('canvas'));
+  const [lottieProgress, setLottieProgress] = useState<number | null>(null);
+  const [cropMode, setCropMode] = useState(false);
+  const [cropRect, setCropRect] = useState({ x: 0.1, y: 0.1, w: 0.8, h: 0.8 });
+  const cropDragRef = useRef<{
+    type: 'move' | 'tl' | 'tr' | 'bl' | 'br' | 't' | 'b' | 'l' | 'r';
+    startX: number; startY: number;
+    origRect: typeof cropRect;
+  } | null>(null);
 
   // Text overlay ImageData (rendered text at canvas resolution for halftone blending)
   const textOverlayRef = useRef<ImageData | null>(null);
@@ -231,6 +247,42 @@ export function HalftoneCanvas({
       renderHalftone(ctx, imageData, w, h, shapes, scaledSettings, animRef.current, mouseRef.current, overlay ?? undefined, bgMedia);
     }
 
+    // Render to offscreen 1920×1080 transparent canvas when recording
+    if (isRecordingRef.current) {
+      const RW = 1920, RH = 1080;
+      const recCanvas = recCanvasRef.current;
+      if (recCanvas.width !== RW || recCanvas.height !== RH) {
+        recCanvas.width = RW;
+        recCanvas.height = RH;
+      }
+      const rctx = recCanvas.getContext('2d');
+      if (rctx) {
+        let recOverlay: ImageData | undefined;
+        if (textLayers.length > 0) {
+          const tCanvas = document.createElement('canvas');
+          tCanvas.width = RW; tCanvas.height = RH;
+          const tCtx = tCanvas.getContext('2d')!;
+          const sf = RW / dimensions.width;
+          for (const layer of textLayers) {
+            tCtx.save();
+            tCtx.font = `${layer.fontSize * sf}px "${layer.fontFamily}"`;
+            tCtx.fillStyle = layer.color;
+            tCtx.textAlign = 'center';
+            tCtx.textBaseline = 'middle';
+            tCtx.fillText(layer.text, layer.x * RW, layer.y * RH);
+            tCtx.restore();
+          }
+          recOverlay = tCtx.getImageData(0, 0, RW, RH);
+        }
+        const sf = RW / dimensions.width;
+        const recSettings = { ...settings, gridSize: Math.round(settings.gridSize * sf) };
+        const recImgData = sourceImage ? imageToImageData(sourceImage, Math.max(RW, RH)) : imageDataRef.current;
+        // Use separate animState to avoid phase array conflicts with display canvas
+        recAnimRef.current.time = animRef.current.time;
+        renderHalftone(rctx, recImgData, RW, RH, shapes, recSettings, recAnimRef.current, undefined, recOverlay, null, true);
+      }
+    }
+
     animRef.current.time += 0.016;
     rafRef.current = requestAnimationFrame(render);
   }, [sourceImage, settings, dimensions, dpr, showOriginal, bgMedia, textLayers]);
@@ -318,6 +370,176 @@ export function HalftoneCanvas({
       URL.revokeObjectURL(url);
     }, 'image/png');
   }, [settings, dimensions, sourceImage, showOriginal, bgMedia, textLayers]);
+
+  const toggleRecording = useCallback(() => {
+    if (isRecording) {
+      mediaRecorderRef.current?.stop();
+    } else {
+      // Initialize offscreen canvas at 1920×1080
+      const recCanvas = recCanvasRef.current;
+      recCanvas.width = 1920;
+      recCanvas.height = 1080;
+
+      recordedChunksRef.current = [];
+      // VP9 supports alpha channel (transparent background)
+      const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
+        ? 'video/webm;codecs=vp9'
+        : 'video/webm;codecs=vp8';
+      const stream = recCanvas.captureStream(60);
+      const mr = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 40_000_000 });
+
+      mr.ondataavailable = (e) => {
+        if (e.data.size > 0) recordedChunksRef.current.push(e.data);
+      };
+      mr.onstop = () => {
+        const blob = new Blob(recordedChunksRef.current, { type: mimeType });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `0TO1-halftone-transparent-${Date.now()}.webm`;
+        a.click();
+        URL.revokeObjectURL(url);
+        isRecordingRef.current = false;
+        setIsRecording(false);
+        setRecSeconds(0);
+        if (recTimerRef.current) clearInterval(recTimerRef.current);
+      };
+
+      mr.start(100);
+      mediaRecorderRef.current = mr;
+      isRecordingRef.current = true;
+      setIsRecording(true);
+      setRecSeconds(0);
+      recTimerRef.current = setInterval(() => setRecSeconds(s => s + 1), 1000);
+    }
+  }, [isRecording]);
+
+  const exportLottie = useCallback(async (durationSec = 3, fps = 24) => {
+    const shapes = shapesRef.current;
+    if (!shapes) return;
+
+    const RW = 1920, RH = 1080;
+    // Crop pixel coords at 1920x1080
+    const cx = Math.round(cropRect.x * RW);
+    const cy = Math.round(cropRect.y * RH);
+    const cw = Math.round(cropRect.w * RW);
+    const ch = Math.round(cropRect.h * RH);
+
+    const totalFrames = Math.round(durationSec * fps);
+    const lottieAnim: AnimationState = createAnimationState();
+    const offCanvas = document.createElement('canvas');
+    offCanvas.width = RW; offCanvas.height = RH;
+    const ctx = offCanvas.getContext('2d')!;
+    // Crop canvas — actual export size
+    const cropCanvas = document.createElement('canvas');
+    cropCanvas.width = cw; cropCanvas.height = ch;
+    const cropCtx = cropCanvas.getContext('2d')!;
+
+    const sf = RW / dimensions.width;
+    const frameSettings = { ...settings, gridSize: Math.round(settings.gridSize * sf) };
+
+    const assets: object[] = [];
+    const layers: object[] = [];
+
+    for (let i = 0; i < totalFrames; i++) {
+      lottieAnim.time = i * 0.016 * (fps / 60);
+
+      // Build text overlay
+      let recOverlay: ImageData | undefined;
+      if (textLayers.length > 0) {
+        const tc = document.createElement('canvas');
+        tc.width = RW; tc.height = RH;
+        const tCtx = tc.getContext('2d')!;
+        for (const layer of textLayers) {
+          tCtx.save();
+          tCtx.font = `${layer.fontSize * sf}px "${layer.fontFamily}"`;
+          tCtx.fillStyle = layer.color;
+          tCtx.textAlign = 'center';
+          tCtx.textBaseline = 'middle';
+          tCtx.fillText(layer.text, layer.x * RW, layer.y * RH);
+          tCtx.restore();
+        }
+        recOverlay = tCtx.getImageData(0, 0, RW, RH);
+      }
+
+      const imgData = sourceImage ? imageToImageData(sourceImage, Math.max(RW, RH)) : imageDataRef.current;
+      renderHalftone(ctx, imgData, RW, RH, shapes, frameSettings, lottieAnim, undefined, recOverlay, null, true);
+
+      // Crop the rendered frame
+      cropCtx.clearRect(0, 0, cw, ch);
+      cropCtx.drawImage(offCanvas, cx, cy, cw, ch, 0, 0, cw, ch);
+
+      const dataUrl = cropCanvas.toDataURL('image/png');
+      const id = `fr_${i}`;
+      assets.push({ id, w: cw, h: ch, u: '', p: dataUrl, e: 1 });
+      layers.push({
+        ddd: 0, ind: i + 1, ty: 2, nm: `frame_${i}`,
+        refId: id, sr: 1,
+        ks: {
+          o: { a: 0, k: 100 }, r: { a: 0, k: 0 },
+          p: { a: 0, k: [cw / 2, ch / 2, 0] },
+          a: { a: 0, k: [cw / 2, ch / 2, 0] },
+          s: { a: 0, k: [100, 100, 100] },
+        },
+        ip: i, op: i + 1, st: 0, bm: 0,
+      });
+
+      setLottieProgress(Math.round(((i + 1) / totalFrames) * 100));
+      await new Promise(r => setTimeout(r, 0));
+    }
+
+    const lottieJson = {
+      v: '5.5.2', fr: fps, ip: 0, op: totalFrames,
+      w: cw, h: ch, nm: '0TO1-halftone', ddd: 0,
+      assets, layers,
+    };
+
+    const blob = new Blob([JSON.stringify(lottieJson)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `0TO1-halftone-${durationSec}s-${fps}fps.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    setLottieProgress(null);
+  }, [settings, dimensions, sourceImage, textLayers, cropRect]);
+
+  // Crop drag handlers
+  useEffect(() => {
+    if (!cropMode) return;
+    const onMove = (e: MouseEvent) => {
+      const d = cropDragRef.current;
+      if (!d || !containerRef.current) return;
+      const rect = containerRef.current.getBoundingClientRect();
+      const dx = (e.clientX - d.startX) / rect.width;
+      const dy = (e.clientY - d.startY) / rect.height;
+      const o = d.origRect;
+      const MIN = 0.05;
+      setCropRect(prev => {
+        let { x, y, w, h } = o;
+        if (d.type === 'move') {
+          x = Math.max(0, Math.min(1 - w, o.x + dx));
+          y = Math.max(0, Math.min(1 - h, o.y + dy));
+        } else {
+          if (d.type.includes('l')) { const nx = Math.min(o.x + o.w - MIN, o.x + dx); w = o.w - (nx - o.x); x = nx; }
+          if (d.type.includes('r')) { w = Math.max(MIN, Math.min(1 - o.x, o.w + dx)); }
+          if (d.type.includes('t')) { const ny = Math.min(o.y + o.h - MIN, o.y + dy); h = o.h - (ny - o.y); y = ny; }
+          if (d.type.includes('b')) { h = Math.max(MIN, Math.min(1 - o.y, o.h + dy)); }
+        }
+        return { x, y, w, h };
+      });
+      void prev;
+    };
+    const onUp = () => { cropDragRef.current = null; };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
+  }, [cropMode]);
+
+  const startCropDrag = (e: React.MouseEvent, type: typeof cropDragRef.current extends null ? never : NonNullable<typeof cropDragRef.current>['type']) => {
+    e.preventDefault(); e.stopPropagation();
+    cropDragRef.current = { type, startX: e.clientX, startY: e.clientY, origRect: { ...cropRect } };
+  };
 
   // Text drag handlers
   const handleTextMouseDown = useCallback((e: React.MouseEvent, id: string, layer: TextLayer) => {
@@ -464,6 +686,50 @@ export function HalftoneCanvas({
         />
       ))}
 
+      {/* Crop overlay */}
+      {cropMode && (
+        <div className="absolute inset-0 pointer-events-none" style={{ zIndex: 40 }}>
+          {/* Dark masks */}
+          <div className="absolute bg-black/60" style={{ top: 0, left: 0, right: 0, height: `${cropRect.y * 100}%` }} />
+          <div className="absolute bg-black/60" style={{ bottom: 0, left: 0, right: 0, height: `${(1 - cropRect.y - cropRect.h) * 100}%` }} />
+          <div className="absolute bg-black/60" style={{ top: `${cropRect.y * 100}%`, left: 0, width: `${cropRect.x * 100}%`, height: `${cropRect.h * 100}%` }} />
+          <div className="absolute bg-black/60" style={{ top: `${cropRect.y * 100}%`, right: 0, width: `${(1 - cropRect.x - cropRect.w) * 100}%`, height: `${cropRect.h * 100}%` }} />
+          {/* Crop box */}
+          <div
+            className="absolute border border-white pointer-events-auto cursor-move"
+            style={{ left: `${cropRect.x * 100}%`, top: `${cropRect.y * 100}%`, width: `${cropRect.w * 100}%`, height: `${cropRect.h * 100}%` }}
+            onMouseDown={(e) => startCropDrag(e, 'move')}
+          >
+            {/* Size label */}
+            <div className="absolute -top-6 left-0 text-white text-[10px] font-mono whitespace-nowrap bg-black/70 px-1">
+              {Math.round(cropRect.w * 1920)} × {Math.round(cropRect.h * 1080)}
+            </div>
+            {/* Corner handles */}
+            {(['tl','tr','bl','br'] as const).map(h => (
+              <div key={h} className="absolute w-3 h-3 bg-white pointer-events-auto cursor-pointer"
+                style={{
+                  top: h.includes('t') ? -4 : undefined, bottom: h.includes('b') ? -4 : undefined,
+                  left: h.includes('l') ? -4 : undefined, right: h.includes('r') ? -4 : undefined,
+                }}
+                onMouseDown={(e) => startCropDrag(e, h)}
+              />
+            ))}
+            {/* Edge handles */}
+            {(['t','b','l','r'] as const).map(h => (
+              <div key={h} className="absolute bg-white pointer-events-auto"
+                style={{
+                  ...(h === 't' ? { top: -2, left: '50%', transform: 'translateX(-50%)', width: 24, height: 4, cursor: 'n-resize' } : {}),
+                  ...(h === 'b' ? { bottom: -2, left: '50%', transform: 'translateX(-50%)', width: 24, height: 4, cursor: 's-resize' } : {}),
+                  ...(h === 'l' ? { left: -2, top: '50%', transform: 'translateY(-50%)', width: 4, height: 24, cursor: 'w-resize' } : {}),
+                  ...(h === 'r' ? { right: -2, top: '50%', transform: 'translateY(-50%)', width: 4, height: 24, cursor: 'e-resize' } : {}),
+                }}
+                onMouseDown={(e) => startCropDrag(e, h)}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Show original indicator */}
       {showOriginal && sourceImage && (
         <div className="absolute top-4 right-4 px-3 py-1.5 bg-white/90 text-black text-[10px] font-mono
@@ -489,6 +755,32 @@ export function HalftoneCanvas({
             title="Export as PNG"
           >
             Export
+          </button>
+          <button
+            onClick={toggleRecording}
+            className={`px-3 py-1.5 text-xs font-mono tracking-wider uppercase transition-colors cursor-pointer ${
+              isRecording
+                ? 'bg-red-600 text-white hover:bg-red-700 animate-pulse'
+                : 'bg-black text-white hover:bg-neutral-800'
+            }`}
+            title={isRecording ? 'Stop recording' : 'Record video'}
+          >
+            {isRecording ? `● ${String(Math.floor(recSeconds / 60)).padStart(2, '0')}:${String(recSeconds % 60).padStart(2, '0')}` : 'Rec'}
+          </button>
+          <button
+            onClick={() => setCropMode(v => !v)}
+            className={`px-3 py-1.5 text-xs font-mono tracking-wider uppercase transition-colors cursor-pointer ${cropMode ? 'bg-white text-black' : 'bg-black text-white hover:bg-neutral-800'}`}
+            title="Toggle crop"
+          >
+            Crop
+          </button>
+          <button
+            onClick={() => exportLottie(3, 24)}
+            disabled={lottieProgress !== null}
+            className={`px-3 py-1.5 text-xs font-mono tracking-wider uppercase transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${cropMode ? 'bg-white text-black hover:bg-neutral-200' : 'bg-black text-white hover:bg-neutral-800'}`}
+            title="Export as Lottie JSON (3s 24fps transparent)"
+          >
+            {lottieProgress !== null ? `${lottieProgress}%` : 'Lottie'}
           </button>
         </div>
       )}

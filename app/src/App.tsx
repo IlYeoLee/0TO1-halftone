@@ -17,7 +17,12 @@ export interface TextLayer {
 
 export default function App() {
   const [sourceMedia, setSourceMedia] = useState<HTMLImageElement | HTMLVideoElement | null>(null);
-  const [settings, setSettings] = useState<HalftoneSettings>(DEFAULT_SETTINGS);
+  const [settings, setSettings] = useState<HalftoneSettings>(() => {
+    try {
+      const saved = localStorage.getItem('halftone-settings');
+      return saved ? { ...DEFAULT_SETTINGS, ...JSON.parse(saved) } : DEFAULT_SETTINGS;
+    } catch { return DEFAULT_SETTINGS; }
+  });
   const [settingsHistory, setSettingsHistory] = useState<HalftoneSettings[]>([]);
   const [cameraOpen, setCameraOpen] = useState(false);
   const [hasCamera, setHasCamera] = useState(false);
@@ -25,9 +30,23 @@ export default function App() {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showOriginal, setShowOriginal] = useState(false);
   const [showCursor, setShowCursor] = useState(true);
-  const [textLayers, setTextLayers] = useState<TextLayer[]>([]);
+  const [textLayers, setTextLayers] = useState<TextLayer[]>(() => {
+    try {
+      const saved = localStorage.getItem('halftone-textlayers');
+      return saved ? JSON.parse(saved) : [];
+    } catch { return []; }
+  });
   const [selectedTextId, setSelectedTextId] = useState<string | null>(null);
   const [bgMedia, setBgMedia] = useState<HTMLImageElement | HTMLVideoElement | null>(null);
+  // Auto-save to localStorage
+  useEffect(() => {
+    localStorage.setItem('halftone-settings', JSON.stringify(settings));
+  }, [settings]);
+
+  useEffect(() => {
+    localStorage.setItem('halftone-textlayers', JSON.stringify(textLayers));
+  }, [textLayers]);
+
   const appRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const bgVideoRef = useRef<HTMLVideoElement | null>(null);
